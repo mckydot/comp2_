@@ -16,8 +16,8 @@ public class ChatClient extends JFrame {
     private DataOutputStream out;
 
     private String userName;
-    private File logFile = new File("chatlog.txt");
-
+    private File logFile = new File("chatlog.txt");// 일반 대화 로그
+    private File encLogFile = new File("chatlog_enc.txt"); // 암호화된 외계어 로그
     public ChatClient() {
         setTitle("간단 채팅 클라이언트");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -99,10 +99,17 @@ public class ChatClient extends JFrame {
                     String type = in.readUTF();
                     if ("TEXT".equals(type)) {
                         String sender = in.readUTF();
-                        String msg = in.readUTF();
-                        String line = sender + ": " + msg;
+                        String encryptedMsg = in.readUTF(); // 일단 암호화된 걸 받음
+                        // [추가] 암호화된 상태 그대로 별도 파일에 저장!
+                        appendEncLog(sender + ": " + encryptedMsg);
+
+                        // 2. 복호화 (암호 풀기)
+                        String decryptedMsg = xorMessage(encryptedMsg);
+
+                        // 3. 화면에 띄우고 일반 로그에 저장
+                        String line = sender + ": " + decryptedMsg;
                         appendMessage(line);
-                        appendLog(line);
+                        appendLog(line); // 이건 해석된 말 저장
                     } else if ("IMAGE".equals(type)) {
                         String sender = in.readUTF();
                         String fileName = in.readUTF();
@@ -146,19 +153,34 @@ public class ChatClient extends JFrame {
         receiver.start();
     }
 
-    private void sendTextMessage() {
+    private void sendTextMessage() {  //약간 변경된 메소드
         String text = inputField.getText().trim();
         if (text.isEmpty()) return;
 
         try {
             out.writeUTF("TEXT");
-            out.writeUTF(text);
+            // [수정] 입력한 텍스트를 암호화해서 전송!
+            String encryptedText = xorMessage(text);
+            out.writeUTF(encryptedText);
+            //수정 완
             out.flush();
             inputField.setText("");
             // 서버가 브로드캐스트해서 다시 보내줄 거라 여기서 따로 추가 안 해도 됨
         } catch (IOException e) {
             appendMessage("[에러] 메시지를 보낼 수 없습니다: " + e.getMessage());
         }
+    }
+    // 이 메소드를 ChatClient 클래스 안에 추가해줘
+    private String xorMessage(String message) {
+        String key = "secret1234"; // 암호화 키 (친구랑 똑같이 맞춰야 함)
+        StringBuilder result = new StringBuilder();
+
+        for (int i = 0; i < message.length(); i++) {
+            // 문자를 XOR 연산해서 변환 (암호화 <-> 복호화 동일 로직)
+            result.append((char)(message.charAt(i) ^ key.charAt(i % key.length())));
+        }
+
+        return result.toString();
     }
 
     private void sendImage() {
@@ -213,6 +235,16 @@ public class ChatClient extends JFrame {
             pw.println(line);
         } catch (IOException e) {
             // 로그 저장 실패는 크게 중요하진 않으니 조용히 무시해도 됨
+            e.printStackTrace();
+        }
+    }
+    // 암호화된 로그만 따로 저장하는 메소드
+    private void appendEncLog(String line) {
+        try (FileWriter fw = new FileWriter(encLogFile, true);
+             BufferedWriter bw = new BufferedWriter(fw);
+             PrintWriter pw = new PrintWriter(bw)) {
+            pw.println(line);
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
