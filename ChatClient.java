@@ -1,12 +1,14 @@
 import javax.swing.*;
+import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 
 public class ChatClient extends JFrame {
 
-    private JTextArea chatArea;
+    private JTextPane chatArea;
     private JTextField inputField;
     private JButton sendButton;
     private JButton imageButton;
@@ -17,12 +19,22 @@ public class ChatClient extends JFrame {
     private DataOutputStream out;
 
     private String userName;
-    private File logFile = new File("chatlog.txt");// 일반 대화 로그
-    private File encLogFile = new File("chatlog_enc.txt"); // 암호화된 외계어 로그
+    private File logFile = new File("chatlog.txt");           // 복호화된 일반 로그
+    private File encLogFile = new File("chatlog_enc.txt");    // 암호화된 로그
+
+    // 암호키 (간단 XOR)
+    private final String xorKey = "secret1234";
+
     public ChatClient() {
-        setTitle("간단 채팅 클라이언트");
+
+        // OS 기본 룩앤필 적용 (외부 라이브러리 불필요)
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception ignored) {}
+
+        setTitle("간단 채팅 클라이언트 (암호화 + 사용자구분)");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(600, 400);
+        setSize(700, 500);
         setLocationRelativeTo(null);
 
         initGui();
@@ -31,28 +43,66 @@ public class ChatClient extends JFrame {
     }
 
     private void initGui() {
-        chatArea = new JTextArea();
-        chatArea.setEditable(false);
-        JScrollPane scrollPane = new JScrollPane(chatArea);
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
+        // 채팅창: JTextPane + StyledDocument 사용
+        chatArea = new JTextPane();
+        chatArea.setEditable(false);
+        chatArea.setFont(new Font("맑은 고딕", Font.PLAIN, 14));
+        chatArea.setBackground(Color.WHITE);
+        chatArea.setMargin(new Insets(10, 8, 10, 8));
+        JScrollPane scrollPane = new JScrollPane(chatArea);
+        scrollPane.setBorder(BorderFactory.createTitledBorder("채팅"));
+
+        // 입력부
         inputField = new JTextField();
+        inputField.setFont(new Font("맑은 고딕", Font.PLAIN, 14));
+        inputField.setPreferredSize(new Dimension(0, 38));
+
         sendButton = new JButton("전송");
         imageButton = new JButton("이미지 보내기");
         loadLogButton = new JButton("로그 불러오기");
 
-        JPanel bottomPanel = new JPanel(new BorderLayout());
-        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        Font btnFont = new Font("맑은 고딕", Font.BOLD, 13);
+        sendButton.setFont(btnFont);
+        imageButton.setFont(btnFont);
+        loadLogButton.setFont(btnFont);
 
-        bottomPanel.add(inputField, BorderLayout.CENTER);
-        rightPanel.add(sendButton);
+        sendButton.setFocusPainted(false);
+        imageButton.setFocusPainted(false);
+        loadLogButton.setFocusPainted(false);
+
+        // 버튼 스타일(배경색) — 플랫폼에 따라 무시될 수 있음
+        sendButton.setBackground(new Color(60, 140, 230));
+        sendButton.setForeground(Color.WHITE);
+
+        imageButton.setBackground(new Color(90, 90, 90));
+        imageButton.setForeground(Color.WHITE);
+
+        loadLogButton.setBackground(new Color(100, 180, 60));
+        loadLogButton.setForeground(Color.WHITE);
+
+        sendButton.setForeground(Color.BLACK);
+        imageButton.setForeground(Color.BLACK);
+        loadLogButton.setForeground(Color.BLACK);
+
+
+        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         rightPanel.add(imageButton);
         rightPanel.add(loadLogButton);
+        rightPanel.add(sendButton);
+
+        JPanel bottomPanel = new JPanel(new BorderLayout(8, 8));
+        bottomPanel.add(inputField, BorderLayout.CENTER);
         bottomPanel.add(rightPanel, BorderLayout.EAST);
 
-        add(scrollPane, BorderLayout.CENTER);
-        add(bottomPanel, BorderLayout.SOUTH);
+        mainPanel.add(scrollPane, BorderLayout.CENTER);
+        mainPanel.add(bottomPanel, BorderLayout.SOUTH);
 
-        // 엔터키로 전송
+        setContentPane(mainPanel);
+
+        // 액션 연결
         inputField.addActionListener(e -> sendTextMessage());
         sendButton.addActionListener(e -> sendTextMessage());
         imageButton.addActionListener(e -> sendImage());
@@ -65,6 +115,7 @@ public class ChatClient extends JFrame {
             if (userName == null || userName.trim().isEmpty()) {
                 System.exit(0);
             }
+            userName = userName.trim();
 
             String host = JOptionPane.showInputDialog(this, "서버 IP를 입력하세요 (예: 127.0.0.1):", "127.0.0.1");
             if (host == null || host.trim().isEmpty()) {
@@ -81,12 +132,11 @@ public class ChatClient extends JFrame {
             in = new DataInputStream(socket.getInputStream());
             out = new DataOutputStream(socket.getOutputStream());
 
-            // 첫 번째로 이름 전송
+            // 첫 번째로 이름 전송 (서버와 프로토콜 일치)
             out.writeUTF(userName);
             out.flush();
 
-            appendMessage("[시스템] 서버에 연결되었습니다.");
-
+            appendSystemMessage("[시스템] 서버에 연결되었습니다.");
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "서버에 연결할 수 없습니다: " + e.getMessage());
             System.exit(0);
@@ -100,17 +150,24 @@ public class ChatClient extends JFrame {
                     String type = in.readUTF();
                     if ("TEXT".equals(type)) {
                         String sender = in.readUTF();
-                        String encryptedMsg = in.readUTF(); // 일단 암호화된 걸 받음
-                        // [추가] 암호화된 상태 그대로 별도 파일에 저장!
-                        appendEncLog(sender + ": " + encryptedMsg);
+                        String encryptedMsg = in.readUTF();
 
-                        // 2. 복호화 (암호 풀기)
-                        String decryptedMsg = xorMessage(encryptedMsg);
+                        // 암호화된 로그 별도 저장
+                        appendEncLog(sender + ": " + toHexString(encryptedMsg.getBytes(StandardCharsets.ISO_8859_1)));
 
-                        // 3. 화면에 띄우고 일반 로그에 저장
-                        String line = sender + ": " + decryptedMsg;
-                        appendMessage(line);
-                        appendLog(line); // 이건 해석된 말 저장
+                        // 복호화
+                        String decrypted = xorMessage(encryptedMsg);
+
+                        // 구분해서 화면에 출력
+                        if (sender.equals(userName)) {
+                            appendMyMessage(decrypted);
+                        } else {
+                            appendOtherMessage(sender + ": " + decrypted);
+                        }
+
+                        // 일반(복호화된) 로그 저장
+                        appendLog(sender + ": " + decrypted);
+
                     } else if ("IMAGE".equals(type)) {
                         String sender = in.readUTF();
                         String fileName = in.readUTF();
@@ -119,30 +176,27 @@ public class ChatClient extends JFrame {
                         in.readFully(data);
 
                         File dir = new File("downloads");
-                        if (!dir.exists()) {
-                            dir.mkdirs();
-                        }
+                        if (!dir.exists()) dir.mkdirs();
                         File outputFile = new File(dir, System.currentTimeMillis() + "_" + fileName);
                         try (FileOutputStream fos = new FileOutputStream(outputFile)) {
                             fos.write(data);
                         }
 
                         String line = sender + "님이 이미지를 보냈습니다: " + outputFile.getAbsolutePath();
-                        appendMessage(line);
+                        appendOtherMessage(line);     // 이미지 알림은 왼쪽(타인) 스타일로
                         appendLog(line);
-
-                        // 이미지 미리보기 (선택적이지만 과제에 어필하기 좋음)
-                        ImageIcon icon = new ImageIcon(data);
-                        JLabel imgLabel = new JLabel(icon);
-                        JScrollPane sp = new JScrollPane(imgLabel);
-                        sp.setPreferredSize(new Dimension(400, 300));
-                        JOptionPane.showMessageDialog(this, sp,
-                                "이미지 from " + sender,
-                                JOptionPane.PLAIN_MESSAGE);
+                        // 미리보기
+                        SwingUtilities.invokeLater(() -> {
+                            ImageIcon icon = new ImageIcon(data);
+                            JLabel imgLabel = new JLabel(icon);
+                            JScrollPane sp = new JScrollPane(imgLabel);
+                            sp.setPreferredSize(new Dimension(420, 320));
+                            JOptionPane.showMessageDialog(this, sp, "이미지 from " + sender, JOptionPane.PLAIN_MESSAGE);
+                        });
                     }
                 }
             } catch (IOException e) {
-                appendMessage("[시스템] 서버와의 연결이 끊어졌습니다.");
+                appendSystemMessage("[시스템] 서버와의 연결이 끊어졌습니다.");
             } finally {
                 try {
                     if (socket != null) socket.close();
@@ -154,36 +208,26 @@ public class ChatClient extends JFrame {
         receiver.start();
     }
 
-    private void sendTextMessage() {  //약간 변경된 메소드
+    // 텍스트 전송 (암호화 후 전송)
+    private void sendTextMessage() {
         String text = inputField.getText().trim();
         if (text.isEmpty()) return;
 
         try {
             out.writeUTF("TEXT");
-            // [수정] 입력한 텍스트를 암호화해서 전송!
-            String encryptedText = xorMessage(text);
-            out.writeUTF(encryptedText);
-            //수정 완
+            String encrypted = xorMessage(text);
+            // DataOutputStream.writeUTF 사용시 내부적으로 modified UTF-8을 사용하므로
+            // 암호화 문자열은 char 단위 XOR 값(ISO_8859_1 호환)을 그대로 쓰기 위해 문자열로 유지.
+            out.writeUTF(encrypted);
             out.flush();
             inputField.setText("");
-            // 서버가 브로드캐스트해서 다시 보내줄 거라 여기서 따로 추가 안 해도 됨
+            // 서버에서 브로드캐스트해줄 것이므로 여기서는 화면에 바로 추가하지 않음(중복 방지)
         } catch (IOException e) {
-            appendMessage("[에러] 메시지를 보낼 수 없습니다: " + e.getMessage());
+            appendSystemMessage("[에러] 메시지를 보낼 수 없습니다: " + e.getMessage());
         }
     }
-    // 이 메소드를 ChatClient 클래스 안에 추가해줘
-    private String xorMessage(String message) {
-        String key = "secret1234"; // 암호화 키 (친구랑 똑같이 맞춰야 함)
-        StringBuilder result = new StringBuilder();
 
-        for (int i = 0; i < message.length(); i++) {
-            // 문자를 XOR 연산해서 변환 (암호화 <-> 복호화 동일 로직)
-            result.append((char)(message.charAt(i) ^ key.charAt(i % key.length())));
-        }
-
-        return result.toString();
-    }
-
+    // 이미지 전송 (암호화 없이 원래대로)
     private void sendImage() {
         JFileChooser chooser = new JFileChooser();
         int result = chooser.showOpenDialog(this);
@@ -201,13 +245,14 @@ public class ChatClient extends JFrame {
             out.write(data);
             out.flush();
 
-            appendMessage("[시스템] 이미지를 전송했습니다: " + file.getName());
+            appendSystemMessage("[시스템] 이미지를 전송했습니다: " + file.getName());
 
         } catch (IOException e) {
-            appendMessage("[에러] 이미지를 보낼 수 없습니다: " + e.getMessage());
+            appendSystemMessage("[에러] 이미지를 보낼 수 없습니다: " + e.getMessage());
         }
     }
 
+    // 파일 읽기 유틸
     private byte[] readFileToByteArray(File file) throws IOException {
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
              FileInputStream fis = new FileInputStream(file)) {
@@ -221,25 +266,81 @@ public class ChatClient extends JFrame {
         }
     }
 
-    private void appendMessage(String msg) {
-        SwingUtilities.invokeLater(() -> {
-            chatArea.append(msg + "\n");
-            chatArea.setCaretPosition(chatArea.getDocument().getLength());
-        });
+    // XOR 암호화/복호화 (같은 함수가 암/복호 모두 담당)
+    private String xorMessage(String message) {
+        // Java에서 char는 16-bit이므로, 암호화 결과를 안전히 전송하려면
+        // 읽고 쓸 때 동일한 방식으로 처리해야 함.
+        // 여기서는 char 단위 XOR 후 그 결과를 문자열로 바로 사용함.
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < message.length(); i++) {
+            char c = (char) (message.charAt(i) ^ xorKey.charAt(i % xorKey.length()));
+            result.append(c);
+        }
+        return result.toString();
     }
 
-    // 파일 쓰기 (로그 저장)
+    // ---- UI: Styled append helpers ----
+
+    // 시스템 메시지 (중앙 정렬, 회색)
+    private void appendSystemMessage(String msg) {
+        SwingUtilities.invokeLater(() -> appendStyledMessage(msg + "\n",
+                new Color(120, 120, 120), new Color(245, 245, 245), StyleConstants.ALIGN_CENTER));
+    }
+
+    // 내가 보낸 메시지: 오른쪽 정렬, 파란 텍스트/연한 파랑 배경
+    private void appendMyMessage(String msg) {
+        SwingUtilities.invokeLater(() -> appendStyledMessage("[나] " + msg + "\n",
+                new Color(20, 50, 120), new Color(220, 235, 255), StyleConstants.ALIGN_RIGHT));
+    }
+
+    // 다른 사람 메시지: 왼쪽 정렬, 검정 텍스트/연한 회색 배경
+    private void appendOtherMessage(String msg) {
+        SwingUtilities.invokeLater(() -> appendStyledMessage(msg + "\n",
+                Color.BLACK, new Color(245, 245, 245), StyleConstants.ALIGN_LEFT));
+    }
+
+    // 핵심: StyledDocument에 삽입하고 단락 정렬/배경 등 설정
+    private void appendStyledMessage(String text, Color fg, Color bg, int alignment) {
+        StyledDocument doc = chatArea.getStyledDocument();
+        SimpleAttributeSet attrs = new SimpleAttributeSet();
+
+        StyleConstants.setForeground(attrs, fg);
+        StyleConstants.setBackground(attrs, bg);
+        StyleConstants.setFontSize(attrs, 14);
+        StyleConstants.setFontFamily(attrs, "맑은 고딕");
+        StyleConstants.setAlignment(attrs, alignment);
+        StyleConstants.setLeftIndent(attrs, 6);
+        StyleConstants.setRightIndent(attrs, 6);
+        StyleConstants.setSpaceAbove(attrs, 4);
+        StyleConstants.setSpaceBelow(attrs, 4);
+
+        try {
+            int start = doc.getLength();
+            doc.insertString(start, text, attrs);
+
+            // paragraph attributes 적용: 시작위치, 길이
+            int len = text.length();
+            doc.setParagraphAttributes(start, len, attrs, false);
+        } catch (BadLocationException e) {
+            e.printStackTrace();
+        }
+
+        // 스크롤 최하단으로
+        chatArea.setCaretPosition(chatArea.getDocument().getLength());
+    }
+
+    // ---- 로그 저장 ----
     private void appendLog(String line) {
         try (FileWriter fw = new FileWriter(logFile, true);
              BufferedWriter bw = new BufferedWriter(fw);
              PrintWriter pw = new PrintWriter(bw)) {
             pw.println(line);
         } catch (IOException e) {
-            // 로그 저장 실패는 크게 중요하진 않으니 조용히 무시해도 됨
             e.printStackTrace();
         }
     }
-    // 암호화된 로그만 따로 저장하는 메소드
+
+    // 암호화된 로그(16진 표기) 저장
     private void appendEncLog(String line) {
         try (FileWriter fw = new FileWriter(encLogFile, true);
              BufferedWriter bw = new BufferedWriter(fw);
@@ -250,7 +351,7 @@ public class ChatClient extends JFrame {
         }
     }
 
-    // 파일 읽기 (로그 불러오기 기능)
+    // 로그 읽기(복호화된 일반 로그)
     private void loadLog() {
         if (!logFile.exists()) {
             JOptionPane.showMessageDialog(this, "저장된 로그가 없습니다.");
@@ -270,9 +371,19 @@ public class ChatClient extends JFrame {
 
         JTextArea logArea = new JTextArea(sb.toString());
         logArea.setEditable(false);
+        logArea.setFont(new Font("맑은 고딕", Font.PLAIN, 13));
         JScrollPane scrollPane = new JScrollPane(logArea);
-        scrollPane.setPreferredSize(new Dimension(500, 300));
+        scrollPane.setPreferredSize(new Dimension(600, 380));
         JOptionPane.showMessageDialog(this, scrollPane, "채팅 로그", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    // --- 유틸: 문자열 바이트를 16진 문자열로 변환(암호화 로그 표기용) ---
+    private String toHexString(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
     }
 
     public static void main(String[] args) {
