@@ -30,6 +30,15 @@ public class ChatServer {
         }
     }
 
+    // [추가] 전체에게 시스템 메시지 전송
+    public void broadcastSystem(String message) {
+        synchronized (clients) {
+            for (ClientHandler c : clients) {
+                c.sendSystemMessage(message);
+            }
+        }
+    }
+
     // [추가] 귓속말 전송 (특정 대상에게만 전송)
     public void sendWhisper(String sender, String targetName, String message) {
         synchronized (clients) {
@@ -88,6 +97,9 @@ public class ChatServer {
                 // 첫 번째로 클라이언트가 보내는 건 사용자 이름
                 userName = in.readUTF();
                 System.out.println(userName + " connected from " + socket.getRemoteSocketAddress());
+
+                // [추가] ★ 입장 알림 방송 ★
+                server.broadcastSystem("[알림] " + userName + "님이 입장하셨습니다.");
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -116,6 +128,12 @@ public class ChatServer {
                 System.out.println(userName + " disconnected.");
             } finally {
                 server.removeClient(this);
+
+                // [추가] ★ 퇴장 알림 방송 ★
+                // userName이 null이 아닐 때만 방송 (연결하자마자 끊긴 경우 방지)
+                if (userName != null) {
+                    server.broadcastSystem("[알림] " + userName + "님이 퇴장하셨습니다.");
+                }
                 try {
                     socket.close();
                 } catch (IOException ignored) {}
@@ -157,11 +175,20 @@ public class ChatServer {
                 // 무시
             }
         }
+        // [추가] 시스템 메시지 전송용 (암호화 X)
+        synchronized void sendSystemMessage(String message) {
+            try {
+                out.writeUTF("SYSTEM"); // 헤더
+                out.writeUTF(message);  // 내용
+                out.flush();
+            } catch (IOException e) {
+                // 무시
+            }
+        }
 
         // [추가] 이름을 비교하기 위해 필요
         public String getUserName() {
             return userName;
         }
-
     }
 }

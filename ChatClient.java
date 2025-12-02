@@ -206,6 +206,11 @@ public class ChatClient extends JFrame {
                         // 화면에 보라색으로 출력
                         appendWhisperMessage(sender + "님의 귓속말", decrypted);
                         appendLog("[귓]" + sender + ": " + decrypted);
+                    }// [추가] ★ 시스템 메시지 처리 ★
+                    else if ("SYSTEM".equals(type)) {
+                        String msg = in.readUTF(); // 암호화 안 된 평문 읽기
+                        appendSystemMessage(msg);  // 화면 중앙에 회색으로 출력
+                        appendLog(msg);            // 로그에도 저장 (선택사항)
                     }
                 }
             } catch (IOException e) {
