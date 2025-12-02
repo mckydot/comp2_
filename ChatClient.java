@@ -193,6 +193,19 @@ public class ChatClient extends JFrame {
                             sp.setPreferredSize(new Dimension(420, 320));
                             JOptionPane.showMessageDialog(this, sp, "이미지 from " + sender, JOptionPane.PLAIN_MESSAGE);
                         });
+                    }// [추가] 귓속말 수신 처리
+                    else if ("WHISPER".equals(type)) {
+                        String sender = in.readUTF();
+                        String encryptedMsg = in.readUTF();
+
+                        // 귓속말은 로그에 [귓] 표시해서 저장 (선택)
+                        appendEncLog("[귓]" + sender + ": " + toHexString(encryptedMsg.getBytes(StandardCharsets.ISO_8859_1)));
+
+                        String decrypted = xorMessage(encryptedMsg);
+
+                        // 화면에 보라색으로 출력
+                        appendWhisperMessage(sender + "님의 귓속말", decrypted);
+                        appendLog("[귓]" + sender + ": " + decrypted);
                     }
                 }
             } catch (IOException e) {
@@ -209,19 +222,41 @@ public class ChatClient extends JFrame {
     }
 
     // 텍스트 전송 (암호화 후 전송)
+    // 텍스트 전송 (귓속말 기능 추가)
     private void sendTextMessage() {
         String text = inputField.getText().trim();
         if (text.isEmpty()) return;
 
         try {
-            out.writeUTF("TEXT");
-            String encrypted = xorMessage(text);
-            // DataOutputStream.writeUTF 사용시 내부적으로 modified UTF-8을 사용하므로
-            // 암호화 문자열은 char 단위 XOR 값(ISO_8859_1 호환)을 그대로 쓰기 위해 문자열로 유지.
-            out.writeUTF(encrypted);
-            out.flush();
+            // 1. 귓속말인지 확인 ("/귓 닉네임 할말" 형식)
+            if (text.startsWith("/귓 ")) {
+                String[] parts = text.split(" ", 3); // 공백 기준 3덩어리로 나눔
+
+                if (parts.length == 3) {
+                    String targetName = parts[1];
+                    String content = parts[2];
+
+                    out.writeUTF("WHISPER");           // 1. 타입
+                    out.writeUTF(targetName);          // 2. 받는 사람
+                    out.writeUTF(xorMessage(content)); // 3. 암호화된 내용
+                    out.flush();
+
+                    // 내 화면에도 표시 (보라색으로)
+                    appendWhisperMessage("나 -> " + targetName, content);
+                } else {
+                    appendSystemMessage("[시스템] 사용법: /귓 [상대방이름] [할말]");
+                    return; // 전송 안 하고 종료
+                }
+            }
+            // 2. 일반 메시지 (기존 로직)
+            else {
+                out.writeUTF("TEXT");
+                out.writeUTF(xorMessage(text));
+                out.flush();
+            }
+
             inputField.setText("");
-            // 서버에서 브로드캐스트해줄 것이므로 여기서는 화면에 바로 추가하지 않음(중복 방지)
+
         } catch (IOException e) {
             appendSystemMessage("[에러] 메시지를 보낼 수 없습니다: " + e.getMessage());
         }
@@ -327,6 +362,12 @@ public class ChatClient extends JFrame {
 
         // 스크롤 최하단으로
         chatArea.setCaretPosition(chatArea.getDocument().getLength());
+    }
+
+    // [추가] 귓속말 UI: 왼쪽 정렬, 보라색 텍스트/연한 보라 배경
+    private void appendWhisperMessage(String title, String msg) {
+        SwingUtilities.invokeLater(() -> appendStyledMessage("[" + title + "] " + msg + "\n",
+                new Color(180, 0, 180), new Color(250, 230, 250), StyleConstants.ALIGN_LEFT));
     }
 
     // ---- 로그 저장 ----

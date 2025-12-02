@@ -30,6 +30,23 @@ public class ChatServer {
         }
     }
 
+    // [추가] 귓속말 전송 (특정 대상에게만 전송)
+    public void sendWhisper(String sender, String targetName, String message) {
+        synchronized (clients) {
+            boolean found = false;
+            for (ClientHandler c : clients) {
+                // ClientHandler에 getUserName()을 만들거나, userName 변수를 public으로 변경 필요
+                // 여기서는 아래 (3)번에서 getUserName()을 추가한다고 가정
+                if (c.getUserName().equals(targetName)) {
+                    c.sendWhisperPacket(sender, message);
+                    found = true;
+                    break;
+                }
+            }
+            // (선택사항) 보낸 사람에게 '전송 완료' 알림을 주고 싶으면 여기서 처리 가능
+        }
+    }
+
     public void broadcastImage(String sender, String fileName, byte[] data) {
         synchronized (clients) {
             for (ClientHandler c : clients) {
@@ -89,6 +106,10 @@ public class ChatServer {
                         byte[] data = new byte[len];
                         in.readFully(data);
                         server.broadcastImage(userName, fileName, data);
+                    }else if ("WHISPER".equals(type)) {
+                        String targetName = in.readUTF(); // 받는 사람 이름
+                        String msg = in.readUTF();        // 암호화된 메시지
+                        server.sendWhisper(userName, targetName, msg);
                     }
                 }
             } catch (IOException e) {
@@ -124,5 +145,23 @@ public class ChatServer {
                 // 마찬가지로 무시
             }
         }
+
+        /** [추가] 귓속말 패킷 전송 **/
+        synchronized void sendWhisperPacket(String sender, String message) {
+            try {
+                out.writeUTF("WHISPER"); // 클라이언트가 구분할 헤더
+                out.writeUTF(sender);    // 보낸 사람
+                out.writeUTF(message);   // 내용
+                out.flush();
+            } catch (IOException e) {
+                // 무시
+            }
+        }
+
+        // [추가] 이름을 비교하기 위해 필요
+        public String getUserName() {
+            return userName;
+        }
+
     }
 }
